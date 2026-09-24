@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07150f" />
+    <meta name="description" content="정령 카드와 팀 전투를 결합한 탑다운 액션 전투 프로토타입" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%23ffcf4a' d='M35 3c4 15-8 18-2 28 2-8 10-10 11-19 11 12 15 24 8 36-8 14-32 16-41 1C1 33 12 20 24 12c-2 10 2 13 5 17C27 17 35 13 35 3Z'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css?v=11" />
+    <title>Element Clash — 전투 프로토타입</title>
+  </head>
+  <body>
+    <main class="game-shell">
+      <header class="topbar">
+        <div class="brand"><span class="brand-flame">◆</span><strong>ELEMENT CLASH</strong><small>combat prototype</small></div>
+        <div class="top-actions">
+          <button id="helpButton" class="chrome-button" type="button">조작법</button>
+          <button id="soundButton" class="chrome-button" type="button" aria-pressed="true">소리 ON</button>
+          <button id="pauseButton" class="chrome-button" type="button">일시정지</button>
+        </div>
+      </header>
+
+      <section class="arena-frame" aria-label="팀 전투 게임">
+        <canvas id="gameCanvas" width="1280" height="720" aria-label="Element Clash 전투 화면"></canvas>
+
+        <div id="hud" class="hud" hidden>
+          <div class="status-panel glass">
+            <div class="portrait" id="portrait">검</div>
+            <div class="bars">
+              <div class="bar-row"><span>HP</span><div class="bar"><i id="hpBar" class="hp"></i></div><b id="hpText">120</b></div>
+              <div class="bar-row"><span>MP</span><div class="bar"><i id="mpBar" class="mp"></i></div><b id="mpText">100</b></div>
+              <div class="bar-row"><span>BP</span><div class="bar"><i id="bpBar" class="bp"></i></div><b id="bpText">100</b></div>
+            </div>
+          </div>
+
+          <div class="match-panel glass">
+            <span class="blue-team">BLUE</span><strong id="blueScore">0</strong><em>:</em><strong id="redScore">0</strong><span class="red-team">RED</span>
+            <time id="matchTime">03:00</time>
+            <small id="scoreGoal">5 K.O. 선취 · 1대1 연습전</small>
+          </div>
+
+          <div id="killFeed" class="kill-feed" aria-live="polite"></div>
+
+          <div class="card-rack glass" aria-label="장착 카드">
+            <div class="equip-card weapon"><span>무기</span><b id="weaponCard">홍염검</b><small>근접 강화</small></div>
+            <div class="equip-card armor"><span>방어</span><b id="armorCard">수호갑</b><small>피해 감소</small></div>
+            <div class="equip-card magic"><span>마법</span><b id="magicCard">유성진</b><small>범위 공격</small></div>
+          </div>
+
+          <div class="skill-bar glass">
+            <div><kbd>J</kbd><span>근접</span><i id="meleeCd"></i></div>
+            <div><kbd>K</kbd><span>원거리</span><i id="rangeCd"></i></div>
+            <div><kbd>L</kbd><span>마법</span><i id="magicCd"></i></div>
+            <div><kbd>SPACE</kbd><span>방어</span><i id="guardState"></i></div>
+            <div><kbd>SHIFT</kbd><span>질주</span><i id="dashState"></i></div>
+          </div>
+        </div>
+
+        <section id="startScreen" class="screen-overlay start-screen">
+          <div class="start-card">
+            <p id="modeEyebrow" class="overline">1 VS 1 · PRACTICE DUEL</p>
+            <h1>정령 전사를 선택하세요</h1>
+            <p class="intro">근접·원거리·마법과 방어 타이밍이 맞물리는 실시간 전투입니다.</p>
+            <div class="mode-switch" role="radiogroup" aria-label="전투 모드">
+              <button class="mode-option selected" data-mode="duel" role="radio" aria-checked="true" type="button"><b>1 VS 1</b><span>연습전 · 5 K.O.</span></button>
+              <button class="mode-option" data-mode="team" role="radio" aria-checked="false" type="button"><b>4 VS 4</b><span>팀전 · 12 K.O.</span></button>
+              <button class="mode-option" data-mode="random" role="radio" aria-checked="false" type="button"><b>랜덤 대전</b><span>접속자 자동 매칭</span></button>
+              <button class="mode-option" data-mode="invite" role="radio" aria-checked="false" type="button"><b>초대 대전</b><span>6자리 코드 매칭</span></button>
+            </div>
+            <div class="fighter-grid" role="radiogroup" aria-label="전사 선택">
+              <button class="fighter selected" data-class="blade" role="radio" aria-checked="true">
+                <span class="fighter-art blade-art">⚔</span><b>화염 검사</b><small>균형형 · 끝검과 반격</small>
+                <i><em>체력</em><u style="--stat:90%"></u></i><i><em>속도</em><u style="--stat:70%"></u></i>
+              </button>
+              <button class="fighter" data-class="ranger" role="radio" aria-checked="false">
+                <span class="fighter-art ranger-art">➳</span><b>바람 궁수</b><small>기동형 · 원거리 견제</small>
+                <i><em>체력</em><u style="--stat:62%"></u></i><i><em>속도</em><u style="--stat:94%"></u></i>
+              </button>
+              <button class="fighter" data-class="mage" role="radio" aria-checked="false">
+                <span class="fighter-art mage-art">✦</span><b>서리 술사</b><small>마법형 · 광역 제어</small>
+                <i><em>체력</em><u style="--stat:55%"></u></i><i><em>마력</em><u style="--stat:100%"></u></i>
+              </button>
+            </div>
+            <section id="opponentPicker" class="opponent-picker">
+              <b>컴퓨터 상대 선택</b>
+              <div role="radiogroup" aria-label="컴퓨터 전사 선택">
+                <button class="opponent-option" data-opponent-class="blade" type="button">검사</button>
+                <button class="opponent-option selected" data-opponent-class="ranger" type="button">궁수</button>
+                <button class="opponent-option" data-opponent-class="mage" type="button">술사</button>
+              </div>
+            </section>
+            <section id="matchmakingPanel" class="matchmaking-panel" hidden>
+              <p id="matchStatus">온라인 서버에 연결 중입니다…</p>
+              <div id="inviteControls" class="invite-controls" hidden>
+                <input id="inviteCode" type="text" maxlength="6" autocomplete="off" placeholder="초대 코드 6자리" aria-label="초대 코드" />
+                <button id="joinInviteButton" type="button">코드로 참가</button>
+              </div>
+              <button id="cancelMatchButton" class="cancel-match" type="button" hidden>매칭 취소</button>
+            </section>
+            <button id="startButton" class="start-button" type="button"><span>전투 시작</span><small>클릭 또는 ENTER</small></button>
+            <p class="quick-help">이동 WASD/방향키 · 근접 J · 원거리 K · 마법 L · 방어 SPACE · 질주 SHIFT</p>
+          </div>
+        </section>
+
+        <section id="resultScreen" class="screen-overlay result-screen" hidden>
+          <div class="result-card">
+            <p id="resultEyebrow" class="overline">MATCH COMPLETE</p>
+            <h2 id="resultTitle">승리!</h2>
+            <div class="result-score"><strong id="resultBlue">12</strong><span>:</span><strong id="resultRed">8</strong></div>
+            <p id="resultStats">3 K.O. · 1 DEATH · 1,240 DAMAGE</p>
+            <button id="restartButton" class="start-button" type="button">다시 싸우기</button>
+          </div>
+        </section>
+
+        <div id="mobileControls" class="mobile-controls" hidden>
+          <div id="joystick" class="joystick" aria-label="이동 조이스틱"><i></i></div>
+          <div class="mobile-actions">
+            <button data-action="guard" class="guard-touch">방어</button>
+            <button data-action="magic" class="magic-touch">마법</button>
+            <button data-action="range" class="range-touch">원거리</button>
+            <button data-action="melee" class="melee-touch">공격</button>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer-note">비공식 팬 영감 프로토타입 · 원작 캐릭터와 리소스를 사용하지 않은 독립 구현</footer>
+    </main>
+
+    <dialog id="helpDialog">
+      <form method="dialog">
+        <div class="dialog-title"><div><p class="overline">BATTLE MANUAL</p><h2>싸우는 법</h2></div><button value="close" aria-label="닫기">×</button></div>
+        <div class="manual-grid">
+          <div><kbd>WASD / 방향키</kbd><b>8방향 이동</b><p>키를 놓아도 관성으로 미끄러집니다. 반대 키로 제동하고 벽 반동으로 방향을 바꾸세요.</p></div>
+          <div><kbd>J</kbd><b>무기 근접 공격</b><p>검·활·마법봉 고유 모션으로 공격하며 정면의 적 투사체도 쳐냅니다.</p></div>
+          <div><kbd>K</kbd><b>원거리 공격</b><p>MP를 조금 소비하는 중거리 견제입니다. 사거리 밖에서는 자연히 사라집니다.</p></div>
+          <div><kbd>L</kbd><b>방향 지정 정령 마법</b><p>MP 35를 사용해 바라보는 방향의 룬 위에 잠시 후 범위 공격을 발동합니다.</p></div>
+          <div><kbd>SPACE</kbd><b>140° 정면 방어·카운터</b><p>BP로 정면 피해를 줄입니다. 방어 중 공격할 수 있지만 공격 동작 동안 방패가 열립니다.</p></div>
+          <div><kbd>SHIFT</kbd><b>질주</b><p>BP를 소비해 가속합니다. 오래 달리면 흙먼지가 나고 벽·장애물에 반동합니다.</p></div>
+        </div>
+        <p class="manual-tip">가만히 있으면 HP·MP·BP가 빠르게 회복됩니다. 쓰러진 전사는 3초 뒤 부활합니다.</p>
+      </form>
+    </dialog>
+
+    <script src="./game.js?v=11"></script>
+  </body>
+</html>
