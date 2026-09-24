@@ -8,13 +8,15 @@ const TAU = Math.PI * 2;
 
 const ui = Object.fromEntries(
   [
-    "hud", "startScreen", "resultScreen", "startButton", "restartButton", "pauseButton", "helpButton", "modeEyebrow",
+    "hud", "startScreen", "resultScreen", "pauseScreen", "startButton", "restartButton", "resultHomeButton", "pauseButton", "helpButton", "modeEyebrow",
     "helpDialog", "soundButton", "hpBar", "mpBar", "bpBar", "hpText", "mpText", "bpText",
     "blueScore", "redScore", "matchTime", "killFeed", "portrait", "weaponCard", "armorCard", "magicCard",
     "meleeCd", "rangeCd", "magicCd", "guardState", "dashState", "resultEyebrow", "resultTitle", "scoreGoal",
     "resultBlue", "resultRed", "resultStats", "mobileControls", "joystick", "opponentPicker",
     "matchmakingPanel", "matchStatus", "inviteControls", "inviteCode", "joinInviteButton", "cancelMatchButton",
-    "homeButton", "landscapeButton",
+    "homeButton", "landscapeButton", "resumeButton", "pauseHomeButton", "pauseTitle", "pauseMessage",
+    "nicknameInput", "onlineCount", "onlineRoomPanel", "roomConnectionState", "activeRoomCode",
+    "waitingRoomInfo", "waitingConnectionState", "waitingRoomCode",
   ].map((id) => [id, document.querySelector(`#${id}`)]),
 );
 
@@ -50,11 +52,16 @@ let lastTime = performance.now();
 let audioEnabled = true;
 let audioCtx = null;
 let landscapeActive = false;
+let playerNickname = (localStorage.getItem("elementClashNickname") || "나의 전사").slice(0, 12);
+const browserPlayerId = localStorage.getItem("elementClashPlayerId") || (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+localStorage.setItem("elementClashPlayerId", browserPlayerId);
 const net = {
-  socket: null, connected: false, waiting: false, role: null, roomCode: null,
+  socket: null, connected: false, waiting: false, role: null, roomCode: null, matchKind: null,
+  lastInviteCode: localStorage.getItem("elementClashInviteCode") || "", playersOnline: 0,
   remoteInput: { moveX: 0, moveY: 0, guard: false, dash: false },
   lastInputSent: 0, lastSnapshotSent: 0, localTeam: 0,
 };
+ui.nicknameInput.value = playerNickname;
 
 function makeEmptyGame() {
   return {
@@ -94,6 +101,33 @@ function setMatchStatus(text, isError = false) {
   ui.matchStatus.style.color = isError ? "#ff9aa4" : "#d4ead8";
 }
 
+function currentNickname() {
+  const nickname = ui.nicknameInput.value.replace(/[<>]/g, "").trim().slice(0, 12) || "나의 전사";
+  if (ui.nicknameInput.value !== nickname) ui.nicknameInput.value = nickname;
+  playerNickname = nickname; localStorage.setItem("elementClashNickname", nickname);
+  return nickname;
+}
+
+function updatePresence(count, connected = true) {
+  net.playersOnline = Number.isFinite(Number(count)) ? Number(count) : net.playersOnline;
+  ui.onlineCount.innerHTML = connected ? `<i></i> 접속 ${net.playersOnline}명` : "연결 끊김";
+}
+
+function rememberInviteCode(code) {
+  if (!code) return;
+  net.lastInviteCode = code; localStorage.setItem("elementClashInviteCode", code);
+  ui.inviteCode.value = code;
+}
+
+function updateRoomDisplay(status = "", code = net.roomCode, visible = Boolean(code)) {
+  ui.waitingRoomInfo.hidden = !visible || selectedMode !== "invite" || game.mode !== "select";
+  ui.onlineRoomPanel.hidden = !visible || game.mode === "select";
+  if (!visible) return;
+  ui.waitingRoomCode.textContent = code; ui.activeRoomCode.textContent = code;
+  ui.waitingConnectionState.innerHTML = `<i></i> ${status}`;
+  ui.roomConnectionState.innerHTML = `<i></i> ${status}`;
+}
+
 function sendNetwork(message) {
   if (net.socket?.readyState === WebSocket.OPEN) net.socket.send(JSON.stringify(message));
 }
@@ -103,9 +137,10 @@ function connectNetwork() {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(`${protocol}//${location.host}/ws`);
   net.socket = socket;
-  socket.addEventListener("open", () => { net.connected = true; setMatchStatus("온라인 대전 서버 연결됨"); });
+  socket.addEventListener("open", () => { net.connected = true; sendNetwork({ type: "hello", clientId: browserPlayerId }); setMatchStatus("온라인 대전 서버 연결됨"); });
   socket.addEventListener("close", () => {
     net.connected = false; net.waiting = false;
+    updatePresence(net.playersOnline, false); updateRoomDisplay("서버 연결 끊김", net.roomCode, Boolean(net.roomCode));
     setMatchStatus("온라인 서버 연결이 끊겼습니다. 잠시 후 다시 시도하세요.", true);
     if (["random", "invite"].includes(game.matchType) && game.mode === "playing") returnToSelection("상대와 연결이 끊겼습니다.");
     setTimeout(connectNetwork, 1800);
@@ -117,18 +152,25 @@ function connectNetwork() {
 }
 
 function handleNetworkMessage(message) {
-  if (message.type === "connected") { net.connected = true; setMatchStatus(`온라인 서버 연결됨 · 접속 ${message.playersOnline}명`); return; }
+  if (message.type === "connected") { net.connected = true; updatePresence(message.playersOnline); setMatchStatus(`온라인 서버 연결됨 · 접속 ${message.playersOnline}명`); return; }
+  if (message.type === "presence") { updatePresence(message.playersOnline); return; }
   if (message.type === "waiting") {
     net.waiting = true; ui.cancelMatchButton.hidden = false;
     setMatchStatus("상대를 찾는 중… 다른 접속자가 오면 바로 시작합니다."); return;
   }
   if (message.type === "invite_created") {
-    net.waiting = true; net.roomCode = message.roomCode; ui.cancelMatchButton.hidden = false;
+    net.waiting = true; net.roomCode = message.roomCode; net.matchKind = "invite"; rememberInviteCode(message.roomCode); ui.cancelMatchButton.hidden = false;
+    updateRoomDisplay(message.rejoined ? "방 재입장 완료 · 상대 대기" : "상대 접속 대기", message.roomCode, true);
     setMatchStatus(`초대 코드 ${message.roomCode} · 상대에게 이 코드를 보내세요.`); return;
   }
   if (message.type === "matched") { startNetworkMatch(message); return; }
-  if (message.type === "cancelled") { net.waiting = false; net.roomCode = null; ui.cancelMatchButton.hidden = true; updateModeUi(); return; }
-  if (message.type === "peer_left") { returnToSelection("상대가 대전에서 나갔습니다."); return; }
+  if (message.type === "rematch_waiting") { ui.restartButton.disabled = true; ui.restartButton.textContent = "상대의 다시 싸우기 선택 대기…"; return; }
+  if (message.type === "cancelled") { net.waiting = false; net.role = null; net.roomCode = null; net.matchKind = null; ui.cancelMatchButton.hidden = true; updateRoomDisplay("", null, false); updateModeUi(); return; }
+  if (message.type === "peer_left") {
+    if (message.roomPreserved && message.roomCode) waitInPreservedInviteRoom(message.roomCode);
+    else returnToSelection("상대가 대전에서 나갔습니다.");
+    return;
+  }
   if (message.type === "error") { net.waiting = false; ui.cancelMatchButton.hidden = true; setMatchStatus(message.message, true); return; }
   if (message.type === "input" && net.role === "host") { net.remoteInput = message.input; return; }
   if (message.type === "action" && net.role === "host") {
@@ -141,14 +183,17 @@ function handleNetworkMessage(message) {
 
 function startNetworkMatch(message) {
   game = makeEmptyGame(); game.mode = "playing"; game.matchType = message.kind; game.networkRole = message.role; game.remaining = 120; game.scoreLimit = 5;
-  net.role = message.role; net.roomCode = message.roomCode; net.localTeam = message.role === "host" ? 0 : 1; net.waiting = false;
+  net.role = message.role; net.roomCode = message.roomCode; net.matchKind = message.kind; net.localTeam = message.role === "host" ? 0 : 1; net.waiting = false;
+  if (message.kind === "invite") rememberInviteCode(message.roomCode);
   const hostActor = createActor(0, message.hostClass, 390, 300, message.role === "host", 0);
   const guestActor = createActor(1, message.guestClass, W - 390, 300, message.role === "guest", 0);
-  hostActor.name = message.role === "host" ? "YOU" : "상대"; guestActor.name = message.role === "guest" ? "YOU" : "상대";
+  hostActor.name = message.hostName || "방장"; guestActor.name = message.guestName || "도전자";
   if (message.role === "host") guestActor.isNetworkRemote = true;
   game.actors.push(hostActor, guestActor); game.player = message.role === "host" ? hostActor : guestActor;
-  ui.startScreen.hidden = true; ui.resultScreen.hidden = true; ui.hud.hidden = false; ui.mobileControls.hidden = false;
-  ui.pauseButton.textContent = "온라인"; applyClassHud(); ui.scoreGoal.textContent = `5 K.O. 선취 · ${message.kind === "random" ? "랜덤" : "초대"} 대전 · ${message.roomCode}`;
+  ui.startScreen.hidden = true; ui.resultScreen.hidden = true; ui.pauseScreen.hidden = true; ui.hud.hidden = false; ui.mobileControls.hidden = false;
+  ui.restartButton.disabled = false; ui.restartButton.textContent = "다시 싸우기";
+  ui.pauseButton.textContent = "경기 메뉴"; applyClassHud(); ui.scoreGoal.textContent = `5 K.O. 선취 · ${message.kind === "random" ? "랜덤" : "초대"} 대전 · ${message.roomCode}`;
+  updateRoomDisplay("상대 연결됨", message.roomCode, true);
   addFeed("상대 연결 완료 — 대전을 시작합니다!", "#ffd34e"); lastTime = performance.now(); tone(620, .16, "triangle", .05);
 }
 
@@ -166,7 +211,6 @@ function applySnapshot(state) {
   if (!state || !Array.isArray(state.actors)) return;
   const actors = state.actors.map((plain) => ({
     ...plain, spec: CLASSES[plain.classId], isPlayer: plain.team === net.localTeam,
-    name: plain.team === net.localTeam ? "YOU" : "상대",
   }));
   const byId = new Map(actors.map((actor) => [actor.id, actor]));
   game.actors = actors; game.player = actors.find((actor) => actor.team === net.localTeam) ?? actors[0];
@@ -176,19 +220,32 @@ function applySnapshot(state) {
 }
 
 function returnToSelection(message) {
-  net.role = null; net.roomCode = null; net.waiting = false; game = makeEmptyGame(); game.mode = "select";
-  ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = true;
+  net.role = null; net.roomCode = null; net.matchKind = null; net.waiting = false; game = makeEmptyGame(); game.mode = "select";
+  ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.pauseScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = true;
+  updateRoomDisplay("", null, false);
   updateModeUi(); setMatchStatus(message, true);
+}
+
+function waitInPreservedInviteRoom(roomCode) {
+  net.role = null; net.roomCode = roomCode; net.matchKind = "invite"; net.waiting = true; rememberInviteCode(roomCode);
+  selectedMode = "invite"; game = makeEmptyGame(); game.mode = "select";
+  document.querySelectorAll(".mode-option").forEach((item) => {
+    const selected = item.dataset.mode === "invite"; item.classList.toggle("selected", selected); item.setAttribute("aria-checked", String(selected));
+  });
+  ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.pauseScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = false;
+  updateModeUi(); updateRoomDisplay("상대 재접속 대기", roomCode, true);
+  setMatchStatus(`상대가 나갔지만 ${roomCode} 방은 유지됩니다. 같은 코드로 다시 들어올 수 있습니다.`);
 }
 
 function goHome() {
   if (net.waiting || net.role) sendNetwork({ type: "cancel" });
-  net.role = null; net.roomCode = null; net.waiting = false; net.remoteInput = { moveX: 0, moveY: 0, guard: false, dash: false };
+  net.role = null; net.roomCode = null; net.matchKind = null; net.waiting = false; net.remoteInput = { moveX: 0, moveY: 0, guard: false, dash: false };
   selectedMode = "duel"; game = makeEmptyGame(); game.mode = "select"; input.keys.clear(); input.moveX = 0; input.moveY = 0; input.guardTouch = false;
   document.querySelectorAll(".mode-option").forEach((item) => {
     const selected = item.dataset.mode === "duel"; item.classList.toggle("selected", selected); item.setAttribute("aria-checked", String(selected));
   });
-  ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = true;
+  ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.pauseScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = true;
+  updateRoomDisplay("", null, false);
   ui.pauseButton.textContent = "일시정지"; updateModeUi(); tone(390, .06, "triangle", .025);
 }
 
@@ -210,7 +267,7 @@ async function toggleLandscape() {
 function createActor(team, classId, x, y, isPlayer = false, index = 0) {
   const spec = CLASSES[classId];
   return {
-    id: game.nextId++, team, classId, spec, isPlayer, name: isPlayer ? "YOU" : `${team ? "R" : "B"}-${index + 1}`,
+    id: game.nextId++, team, classId, spec, isPlayer, name: isPlayer ? currentNickname() : `${team ? "R" : "B"}-${index + 1}`,
     x, y, vx: 0, vy: 0, r: 29, facingX: team ? -1 : 1, facingY: 0,
     hp: spec.hp, maxHp: spec.hp, mp: 100, maxMp: 100, bp: 100, maxBp: 100,
     alive: true, invulnerable: 1.2, respawn: 0, flash: 0, stun: 0, chill: 0, guard: false, guardBreak: 0, counter: 0,
@@ -221,6 +278,7 @@ function createActor(team, classId, x, y, isPlayer = false, index = 0) {
 }
 
 function startMatch() {
+  currentNickname();
   game = makeEmptyGame();
   game.mode = "playing";
   if (selectedMode === "duel") {
@@ -244,6 +302,7 @@ function startMatch() {
   }
   ui.startScreen.hidden = true;
   ui.resultScreen.hidden = true;
+  ui.pauseScreen.hidden = true;
   ui.hud.hidden = false;
   ui.mobileControls.hidden = false;
   ui.pauseButton.textContent = "일시정지";
@@ -581,7 +640,7 @@ function endMatch(winnerTeam, broadcast = true) {
   ui.resultTitle.style.color = win ? "#8ed7ff" : "#ff8790";
   ui.resultBlue.textContent = game.scores[0]; ui.resultRed.textContent = game.scores[1];
   ui.resultStats.textContent = `${game.stats.kills} K.O. · ${game.stats.deaths} DEATH · ${Math.round(game.stats.damage).toLocaleString()} DAMAGE`;
-  ui.resultScreen.hidden = false; ui.mobileControls.hidden = true;
+  ui.pauseScreen.hidden = true; ui.resultScreen.hidden = false; ui.mobileControls.hidden = true;
   if (broadcast && game.networkRole === "host") sendNetwork({ type: "match_end", winnerTeam });
   tone(win ? 620 : 135, .35, win ? "triangle" : "sawtooth", .06);
 }
@@ -853,12 +912,14 @@ function updateModeUi() {
   ui.opponentPicker.hidden = selectedMode !== "duel";
   ui.matchmakingPanel.hidden = !["random", "invite"].includes(selectedMode);
   ui.inviteControls.hidden = selectedMode !== "invite";
+  if (selectedMode === "invite" && !ui.inviteCode.value && net.lastInviteCode) ui.inviteCode.value = net.lastInviteCode;
   ui.cancelMatchButton.hidden = !net.waiting;
   const main = ui.startButton.querySelector("span"); const sub = ui.startButton.querySelector("small");
   if (selectedMode === "random") { main.textContent = "랜덤 매칭 시작"; sub.textContent = "상대가 접속하면 자동 시작"; }
   else if (selectedMode === "invite") { main.textContent = "초대방 만들기"; sub.textContent = "코드를 친구에게 전달"; }
   else { main.textContent = "전투 시작"; sub.textContent = "클릭 또는 ENTER"; }
   if (["random", "invite"].includes(selectedMode) && !net.waiting) setMatchStatus(net.connected ? "온라인 서버 연결됨" : "온라인 서버에 연결 중입니다…");
+  updateRoomDisplay(net.waiting ? "상대 접속 대기" : "", net.roomCode, selectedMode === "invite" && Boolean(net.roomCode));
 }
 
 document.querySelectorAll(".fighter").forEach((button) => button.addEventListener("click", () => {
@@ -873,35 +934,52 @@ document.querySelectorAll(".opponent-option").forEach((button) => button.addEven
 }));
 
 function startSelectedMode() {
+  const nickname = currentNickname();
   if (selectedMode === "duel" || selectedMode === "team") { startMatch(); return; }
   if (!net.connected) { connectNetwork(); setMatchStatus("온라인 서버에 다시 연결 중입니다…", true); return; }
   if (net.waiting) return;
-  if (selectedMode === "random") sendNetwork({ type: "queue_random", classId: selectedClass });
-  else sendNetwork({ type: "create_invite", classId: selectedClass });
+  if (selectedMode === "random") sendNetwork({ type: "queue_random", classId: selectedClass, nickname });
+  else sendNetwork({ type: "create_invite", classId: selectedClass, nickname });
   net.waiting = true; ui.cancelMatchButton.hidden = false; setMatchStatus(selectedMode === "random" ? "상대를 찾는 중…" : "초대 코드를 만드는 중…");
 }
 
 ui.startButton.addEventListener("click", startSelectedMode);
 ui.restartButton.addEventListener("click", () => {
-  if (game.networkRole) { sendNetwork({ type: "cancel" }); returnToSelection("온라인 대전이 끝났습니다. 다시 매칭할 수 있습니다."); }
+  if (game.networkRole) sendNetwork({ type: "rematch" });
   else startMatch();
 });
 ui.joinInviteButton.addEventListener("click", () => {
   const roomCode = ui.inviteCode.value.trim().toUpperCase();
   if (roomCode.length !== 6) { setMatchStatus("초대 코드 6자리를 입력하세요.", true); return; }
   if (!net.connected) { connectNetwork(); setMatchStatus("온라인 서버에 연결 중입니다…", true); return; }
-  sendNetwork({ type: "join_invite", roomCode, classId: selectedClass }); net.waiting = true; ui.cancelMatchButton.hidden = false; setMatchStatus(`${roomCode} 방에 참가하는 중…`);
+  sendNetwork({ type: "join_invite", roomCode, classId: selectedClass, nickname: currentNickname() }); net.waiting = true; ui.cancelMatchButton.hidden = false; rememberInviteCode(roomCode); updateRoomDisplay("방 연결 중", roomCode, true); setMatchStatus(`${roomCode} 방에 참가하는 중…`);
 });
 ui.inviteCode.addEventListener("input", () => { ui.inviteCode.value = ui.inviteCode.value.toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6); });
+ui.nicknameInput.addEventListener("change", currentNickname);
 ui.cancelMatchButton.addEventListener("click", () => sendNetwork({ type: "cancel" }));
 ui.homeButton.addEventListener("click", goHome);
+ui.resultHomeButton.addEventListener("click", goHome);
+ui.pauseHomeButton.addEventListener("click", goHome);
 ui.landscapeButton.addEventListener("click", toggleLandscape);
 ui.helpButton.addEventListener("click", () => ui.helpDialog.showModal());
-ui.pauseButton.addEventListener("click", () => {
-  if (game.networkRole) { addFeed("온라인 대전은 일시정지할 수 없습니다.", "#ffe18a"); return; }
-  if (game.mode === "playing") { game.mode = "paused"; ui.pauseButton.textContent = "계속하기"; }
-  else if (game.mode === "paused") { game.mode = "playing"; ui.pauseButton.textContent = "일시정지"; lastTime = performance.now(); }
-});
+function openPauseMenu() {
+  if (!["playing", "paused"].includes(game.mode)) return;
+  input.keys.clear(); input.moveX = 0; input.moveY = 0; input.guardTouch = false;
+  if (game.networkRole) {
+    ui.pauseTitle.textContent = "온라인 경기 메뉴";
+    ui.pauseMessage.textContent = "온라인 경기는 계속 진행됩니다. 홈으로 나가면 상대가 남은 초대방은 유지됩니다.";
+  } else {
+    game.mode = "paused"; ui.pauseTitle.textContent = "일시정지"; ui.pauseMessage.textContent = "전투가 멈췄습니다.";
+  }
+  ui.pauseScreen.hidden = false; ui.pauseButton.textContent = "계속하기";
+}
+function closePauseMenu() {
+  ui.pauseScreen.hidden = true;
+  if (game.mode === "paused") game.mode = "playing";
+  ui.pauseButton.textContent = game.networkRole ? "경기 메뉴" : "일시정지"; lastTime = performance.now();
+}
+ui.pauseButton.addEventListener("click", () => { if (ui.pauseScreen.hidden) openPauseMenu(); else closePauseMenu(); });
+ui.resumeButton.addEventListener("click", closePauseMenu);
 ui.soundButton.addEventListener("click", () => { audioEnabled = !audioEnabled; ui.soundButton.textContent = `소리 ${audioEnabled ? "ON" : "OFF"}`; ui.soundButton.setAttribute("aria-pressed", String(audioEnabled)); if (audioEnabled) tone(500); });
 
 window.addEventListener("keydown", (event) => {
@@ -913,7 +991,7 @@ window.addEventListener("keydown", (event) => {
   else if (game.mode === "playing" && event.code === "KeyJ") performLocalAction("melee");
   else if (game.mode === "playing" && event.code === "KeyK") performLocalAction("range");
   else if (game.mode === "playing" && event.code === "KeyL") performLocalAction("magic");
-  else if (event.code === "Escape" && (game.mode === "playing" || game.mode === "paused")) ui.pauseButton.click();
+  else if (event.code === "Escape" && (["playing", "paused"].includes(game.mode) || !ui.pauseScreen.hidden)) ui.pauseButton.click();
 });
 window.addEventListener("keyup", (event) => input.keys.delete(event.code));
 window.addEventListener("blur", () => { input.keys.clear(); input.guardTouch = false; if (game.mode === "playing" && !game.networkRole) ui.pauseButton.click(); });

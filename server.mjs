@@ -29,6 +29,13 @@ function send(client, message) {
   if (!client?.socket?.writable) return;
   try { client.socket.write(wsFrame(JSON.stringify(message))); } catch { /* disconnected */ }
 }
+function onlinePlayerCount() {
+  return new Set([...clients].map((client) => client.clientId).filter(Boolean)).size;
+}
+function broadcastPresence() {
+  const message = { type: "presence", playersOnline: onlinePlayerCount() };
+  for (const client of clients) send(client, message);
+}
 function parseFrames(client, chunk) {
   client.buffer = Buffer.concat([client.buffer, chunk]);
   while (client.buffer.length >= 2) {
@@ -53,13 +60,22 @@ function removeFromQueue(client) { const index = randomQueue.indexOf(client); if
 function leaveRoom(client, notify = true) {
   removeFromQueue(client);
   if (!client.room) return;
-  const room = rooms.get(client.room);
+  const code = client.room;
+  const room = rooms.get(code);
+  client.room = null;
   if (room) {
     const peer = room.host === client ? room.guest : room.host;
-    if (notify && peer) { peer.room = null; send(peer, { type: "peer_left" }); }
-    rooms.delete(client.room);
+    if (room.host === client) room.host = null;
+    if (room.guest === client) room.guest = null;
+    // 초대방은 한 명이라도 남아 있으면 같은 코드로 유지한다. 빈 자리는
+    // 방을 만들었던 사람을 포함해 코드를 아는 사용자가 다시 채울 수 있다.
+    if (room.kind === "invite" && peer) {
+      if (notify) send(peer, { type: "peer_left", roomCode: code, roomPreserved: true });
+      return;
+    }
+    if (notify && peer) { peer.room = null; send(peer, { type: "peer_left", roomCode: code, roomPreserved: false }); }
+    rooms.delete(code);
   }
-  client.room = null;
 }
 function makeRoomCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let code = "";
@@ -69,29 +85,56 @@ function makeRoomCode() {
 function match(hostClient, guestClient, code, kind) {
   removeFromQueue(hostClient); removeFromQueue(guestClient);
   rooms.set(code, { code, kind, host: hostClient, guest: guestClient }); hostClient.room = code; guestClient.room = code;
-  const common = { type: "matched", roomCode: code, kind, hostClass: hostClient.classId, guestClass: guestClient.classId };
+  const common = {
+    type: "matched", roomCode: code, kind,
+    hostClass: hostClient.classId, guestClass: guestClient.classId,
+    hostName: hostClient.nickname, guestName: guestClient.nickname,
+  };
   send(hostClient, { ...common, role: "host" }); send(guestClient, { ...common, role: "guest" });
 }
 function validClass(classId) { return ["blade", "ranger", "mage"].includes(classId) ? classId : "blade"; }
+function validNickname(value) {
+  const nickname = String(value || "전사").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, 12);
+  return nickname || "전사";
+}
 function handleMessage(client, message) {
   if (!message || typeof message.type !== "string") return;
+  if (message.type === "hello") {
+    client.clientId = String(message.clientId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) || `guest-${randomBytes(8).toString("hex")}`;
+    send(client, { type: "connected", playersOnline: onlinePlayerCount() }); broadcastPresence(); return;
+  }
   if (message.type === "cancel") { leaveRoom(client); send(client, { type: "cancelled" }); return; }
   if (message.type === "queue_random") {
-    leaveRoom(client); client.classId = validClass(message.classId);
+    leaveRoom(client); client.classId = validClass(message.classId); client.nickname = validNickname(message.nickname);
     const peer = randomQueue.find((candidate) => candidate !== client && candidate.socket.writable);
     if (peer) match(peer, client, makeRoomCode(), "random");
     else { randomQueue.push(client); send(client, { type: "waiting", kind: "random" }); }
     return;
   }
   if (message.type === "create_invite") {
-    leaveRoom(client); client.classId = validClass(message.classId);
+    leaveRoom(client); client.classId = validClass(message.classId); client.nickname = validNickname(message.nickname);
     const code = makeRoomCode(); rooms.set(code, { code, kind: "invite", host: client, guest: null }); client.room = code;
     send(client, { type: "invite_created", roomCode: code }); return;
   }
   if (message.type === "join_invite") {
     const code = String(message.roomCode || "").trim().toUpperCase(); const room = rooms.get(code);
-    if (!room || room.guest || room.host === client) { send(client, { type: "error", message: "참가할 수 없는 초대 코드입니다." }); return; }
-    client.classId = validClass(message.classId); match(room.host, client, code, "invite"); return;
+    if (!room || room.kind !== "invite" || (room.host && room.guest) || room.host === client || room.guest === client) {
+      send(client, { type: "error", message: "참가할 수 없는 초대 코드입니다." }); return;
+    }
+    leaveRoom(client); client.classId = validClass(message.classId); client.nickname = validNickname(message.nickname);
+    if (!room.host) room.host = client; else room.guest = client;
+    client.room = code;
+    if (room.host && room.guest) match(room.host, room.guest, code, "invite");
+    else send(client, { type: "invite_created", roomCode: code, rejoined: true });
+    return;
+  }
+  if (message.type === "rematch" && client.room) {
+    const room = rooms.get(client.room);
+    if (!room?.host || !room?.guest) { send(client, { type: "error", message: "상대가 아직 방에 없습니다." }); return; }
+    room.rematchReady ??= new Set(); room.rematchReady.add(client);
+    send(client, { type: "rematch_waiting" });
+    if (room.rematchReady.size === 2) match(room.host, room.guest, room.code, room.kind);
+    return;
   }
   if (["input", "action", "snapshot", "match_end", "rematch"].includes(message.type) && client.room) {
     const room = rooms.get(client.room); const peer = room && (room.host === client ? room.guest : room.host);
@@ -104,7 +147,7 @@ const server = createServer(async (request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
     if (pathname === "/health") {
       response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-      response.end(JSON.stringify({ ok: true, connected: clients.size, rooms: rooms.size, waiting: randomQueue.length })); return;
+      response.end(JSON.stringify({ ok: true, connected: clients.size, playersOnline: onlinePlayerCount(), rooms: rooms.size, waiting: randomQueue.length })); return;
     }
     const relative = normalize(pathname === "/" ? "index.html" : pathname.slice(1));
     if (relative.startsWith("..")) throw new Error("invalid path");
@@ -121,10 +164,11 @@ server.on("upgrade", (request, socket) => {
   }
   const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-  const client = { socket, buffer: Buffer.alloc(0), room: null, classId: "blade" };
-  clients.add(client); send(client, { type: "connected", playersOnline: clients.size });
+  const client = { socket, buffer: Buffer.alloc(0), room: null, classId: "blade", nickname: "전사", clientId: null };
+  clients.add(client);
   socket.on("data", (chunk) => parseFrames(client, chunk));
-  socket.on("close", () => { leaveRoom(client); clients.delete(client); });
-  socket.on("error", () => { leaveRoom(client); clients.delete(client); });
+  const disconnect = () => { leaveRoom(client); clients.delete(client); broadcastPresence(); };
+  socket.on("close", disconnect);
+  socket.on("error", disconnect);
 });
 server.listen(port, host, () => console.log(`Element Clash: http://127.0.0.1:${port} · 온라인 매칭 서버 준비`));

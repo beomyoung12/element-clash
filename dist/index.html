@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#07150f" />
     <meta name="description" content="정령 카드와 팀 전투를 결합한 탑다운 액션 전투 프로토타입" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%23ffcf4a' d='M35 3c4 15-8 18-2 28 2-8 10-10 11-19 11 12 15 24 8 36-8 14-32 16-41 1C1 33 12 20 24 12c-2 10 2 13 5 17C27 17 35 13 35 3Z'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="./styles.css?v=16" />
+    <link rel="stylesheet" href="./styles.css?v=17" />
     <title>Element Clash — 전투 프로토타입</title>
   </head>
   <body>
@@ -14,6 +14,7 @@
       <header class="topbar">
         <button id="homeButton" class="brand" type="button" aria-label="처음 화면으로 돌아가기"><span class="brand-flame">◆</span><strong>ELEMENT CLASH</strong><small>combat prototype</small></button>
         <div class="top-actions">
+          <span id="onlineCount" class="online-count" title="현재 이 서버에 연결된 브라우저 수"><i></i> 접속 0명</span>
           <button id="landscapeButton" class="chrome-button landscape-button" type="button">↻ 가로화면</button>
           <button id="helpButton" class="chrome-button" type="button">조작법</button>
           <button id="soundButton" class="chrome-button" type="button" aria-pressed="true">소리 ON</button>
@@ -40,6 +41,11 @@
             <small id="scoreGoal">5 K.O. 선취 · 1대1 연습전</small>
           </div>
 
+          <div id="onlineRoomPanel" class="online-room-panel glass" hidden>
+            <span id="roomConnectionState"><i></i> 연결 확인 중</span>
+            <b>방 <code id="activeRoomCode">------</code></b>
+          </div>
+
           <div id="killFeed" class="kill-feed" aria-live="polite"></div>
 
           <div class="card-rack glass" aria-label="장착 카드">
@@ -62,6 +68,7 @@
             <p id="modeEyebrow" class="overline">1 VS 1 · PRACTICE DUEL</p>
             <h1>정령 전사를 선택하세요</h1>
             <p class="intro">근접·원거리·마법과 방어 타이밍이 맞물리는 실시간 전투입니다.</p>
+            <label class="nickname-field" for="nicknameInput"><span>전사 닉네임</span><input id="nicknameInput" type="text" maxlength="12" autocomplete="nickname" placeholder="닉네임 입력" /><small>전투 중 캐릭터 위에 표시됩니다.</small></label>
             <div class="mode-switch" role="radiogroup" aria-label="전투 모드">
               <button class="mode-option selected" data-mode="duel" role="radio" aria-checked="true" type="button"><b>1 VS 1</b><span>연습전 · 5 K.O.</span></button>
               <button class="mode-option" data-mode="team" role="radio" aria-checked="false" type="button"><b>4 VS 4</b><span>팀전 · 12 K.O.</span></button>
@@ -92,6 +99,10 @@
             </section>
             <section id="matchmakingPanel" class="matchmaking-panel" hidden>
               <p id="matchStatus">온라인 서버에 연결 중입니다…</p>
+              <div id="waitingRoomInfo" class="waiting-room-info" hidden>
+                <span id="waitingConnectionState"><i></i> 상대 접속 대기</span>
+                <b>현재 방 <code id="waitingRoomCode">------</code></b>
+              </div>
               <div id="inviteControls" class="invite-controls" hidden>
                 <input id="inviteCode" type="text" maxlength="6" autocomplete="off" placeholder="초대 코드 6자리" aria-label="초대 코드" />
                 <button id="joinInviteButton" type="button">코드로 참가</button>
@@ -103,13 +114,28 @@
           </div>
         </section>
 
+        <section id="pauseScreen" class="screen-overlay pause-screen" hidden>
+          <div class="pause-card">
+            <p class="overline">BATTLE MENU</p>
+            <h2 id="pauseTitle">일시정지</h2>
+            <p id="pauseMessage">전투가 멈췄습니다.</p>
+            <div class="overlay-actions">
+              <button id="resumeButton" class="start-button" type="button">계속하기</button>
+              <button id="pauseHomeButton" class="secondary-button" type="button">홈으로</button>
+            </div>
+          </div>
+        </section>
+
         <section id="resultScreen" class="screen-overlay result-screen" hidden>
           <div class="result-card">
             <p id="resultEyebrow" class="overline">MATCH COMPLETE</p>
             <h2 id="resultTitle">승리!</h2>
             <div class="result-score"><strong id="resultBlue">12</strong><span>:</span><strong id="resultRed">8</strong></div>
             <p id="resultStats">3 K.O. · 1 DEATH · 1,240 DAMAGE</p>
-            <button id="restartButton" class="start-button" type="button">다시 싸우기</button>
+            <div class="overlay-actions">
+              <button id="restartButton" class="start-button" type="button">다시 싸우기</button>
+              <button id="resultHomeButton" class="secondary-button" type="button">홈으로</button>
+            </div>
           </div>
         </section>
 
@@ -142,6 +168,6 @@
       </form>
     </dialog>
 
-    <script src="./game.js?v=16"></script>
+    <script src="./game.js?v=17"></script>
   </body>
 </html>
