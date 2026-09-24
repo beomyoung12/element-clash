@@ -6,14 +6,15 @@
     <meta name="theme-color" content="#07150f" />
     <meta name="description" content="정령 카드와 팀 전투를 결합한 탑다운 액션 전투 프로토타입" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%23ffcf4a' d='M35 3c4 15-8 18-2 28 2-8 10-10 11-19 11 12 15 24 8 36-8 14-32 16-41 1C1 33 12 20 24 12c-2 10 2 13 5 17C27 17 35 13 35 3Z'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="./styles.css?v=11" />
+    <link rel="stylesheet" href="./styles.css?v=12" />
     <title>Element Clash — 전투 프로토타입</title>
   </head>
   <body>
     <main class="game-shell">
       <header class="topbar">
-        <div class="brand"><span class="brand-flame">◆</span><strong>ELEMENT CLASH</strong><small>combat prototype</small></div>
+        <button id="homeButton" class="brand" type="button" aria-label="처음 화면으로 돌아가기"><span class="brand-flame">◆</span><strong>ELEMENT CLASH</strong><small>combat prototype</small></button>
         <div class="top-actions">
+          <button id="landscapeButton" class="chrome-button landscape-button" type="button">↻ 가로화면</button>
           <button id="helpButton" class="chrome-button" type="button">조작법</button>
           <button id="soundButton" class="chrome-button" type="button" aria-pressed="true">소리 ON</button>
           <button id="pauseButton" class="chrome-button" type="button">일시정지</button>
@@ -69,15 +70,15 @@
             </div>
             <div class="fighter-grid" role="radiogroup" aria-label="전사 선택">
               <button class="fighter selected" data-class="blade" role="radio" aria-checked="true">
-                <span class="fighter-art blade-art">⚔</span><b>화염 검사</b><small>균형형 · 끝검과 반격</small>
+                <span class="fighter-art blade-art">⚔</span><b>화염 검사</b><small>근접형 · 체력과 연속 압박</small>
                 <i><em>체력</em><u style="--stat:90%"></u></i><i><em>속도</em><u style="--stat:70%"></u></i>
               </button>
               <button class="fighter" data-class="ranger" role="radio" aria-checked="false">
-                <span class="fighter-art ranger-art">➳</span><b>바람 궁수</b><small>기동형 · 원거리 견제</small>
+                <span class="fighter-art ranger-art">➳</span><b>바람 궁수</b><small>사격형 · 빠른 원거리 견제</small>
                 <i><em>체력</em><u style="--stat:62%"></u></i><i><em>속도</em><u style="--stat:94%"></u></i>
               </button>
               <button class="fighter" data-class="mage" role="radio" aria-checked="false">
-                <span class="fighter-art mage-art">✦</span><b>서리 술사</b><small>마법형 · 광역 제어</small>
+                <span class="fighter-art mage-art">✦</span><b>서리 술사</b><small>제어형 · 자동 추적 빙결</small>
                 <i><em>체력</em><u style="--stat:55%"></u></i><i><em>마력</em><u style="--stat:100%"></u></i>
               </button>
             </div>
@@ -133,7 +134,7 @@
           <div><kbd>WASD / 방향키</kbd><b>8방향 이동</b><p>키를 놓아도 관성으로 미끄러집니다. 반대 키로 제동하고 벽 반동으로 방향을 바꾸세요.</p></div>
           <div><kbd>J</kbd><b>무기 근접 공격</b><p>검·활·마법봉 고유 모션으로 공격하며 정면의 적 투사체도 쳐냅니다.</p></div>
           <div><kbd>K</kbd><b>원거리 공격</b><p>MP를 조금 소비하는 중거리 견제입니다. 사거리 밖에서는 자연히 사라집니다.</p></div>
-          <div><kbd>L</kbd><b>방향 지정 정령 마법</b><p>MP 35를 사용해 바라보는 방향의 룬 위에 잠시 후 범위 공격을 발동합니다.</p></div>
+          <div><kbd>L</kbd><b>직업별 정령 마법</b><p>검사·궁수는 바라보는 방향에 범위 마법을 쓰고, 술사는 가장 가까운 적 위치에 추적 빙결진을 예고한 뒤 발동합니다.</p></div>
           <div><kbd>SPACE</kbd><b>140° 정면 방어·카운터</b><p>BP로 정면 피해를 줄입니다. 방어 중 공격할 수 있지만 공격 동작 동안 방패가 열립니다.</p></div>
           <div><kbd>SHIFT</kbd><b>질주</b><p>BP를 소비해 가속합니다. 오래 달리면 흙먼지가 나고 벽·장애물에 반동합니다.</p></div>
         </div>
@@ -141,6 +142,6 @@
       </form>
     </dialog>
 
-    <script src="./game.js?v=11"></script>
+    <script src="./game.js?v=13"></script>
   </body>
 </html>

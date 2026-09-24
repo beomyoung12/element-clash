@@ -25,7 +25,8 @@ button { font: inherit; cursor: pointer; }
 
 .game-shell { width: min(100%, 1480px); min-height: 100dvh; margin: 0 auto; padding: 10px; display: grid; grid-template-rows: auto 1fr auto; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 2px 10px; }
-.brand { display: flex; align-items: baseline; gap: 9px; letter-spacing: .08em; }
+.brand { display: flex; align-items: baseline; gap: 9px; padding: 0; border: 0; color: inherit; background: transparent; letter-spacing: .08em; cursor: pointer; }
+.brand:hover strong, .brand:focus-visible strong { color: white; text-shadow: 0 0 12px #ffcf4a; }
 .brand strong { font-family: Impact, Haettenschweiler, sans-serif; font-size: 1.5rem; color: #fff3ac; text-shadow: 0 2px #71451b; }
 .brand small { color: var(--muted); font-size: .7rem; text-transform: uppercase; }
 .brand-flame { color: #ff8b38; filter: drop-shadow(0 0 8px #ff9838); }
@@ -36,6 +37,7 @@ button { font: inherit; cursor: pointer; }
   font-size: .78rem; font-weight: 800;
 }
 .chrome-button:hover { border-color: #70c97d; }
+.landscape-button { display: none; }
 
 .arena-frame {
   position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: calc(100dvh - 104px); min-height: 420px;
@@ -131,9 +133,19 @@ dialog form { padding: 22px; }.dialog-title { display: flex; align-items: center
   .screen-overlay { padding: 8px; overflow-y: auto; }.start-card { padding: 13px; }.mode-switch { margin-bottom:8px; grid-template-columns: 1fr 1fr; }.mode-option { min-height:38px; }.fighter-grid { gap: 5px; }.fighter { padding: 6px; }.fighter-art { height: 38px; }.fighter small, .fighter i { display: none; }.quick-help { display: none; }
   .opponent-picker { margin-top: 7px; flex-wrap: wrap; }.matchmaking-panel { margin-top: 7px; padding: 7px; }.start-button { margin-top: 10px; }
   .footer-note { display: none; }.manual-grid { grid-template-columns: 1fr; }
+  .landscape-button { display: inline-block; }
 }
 
 @media (max-width: 520px) {
-  .top-actions #soundButton { display: none; }.fighter-grid { grid-template-columns: 1fr 1fr 1fr; }.fighter b { font-size: .72rem; }.start-card h1 { font-size: 1.45rem; }.intro { font-size: .78rem; margin-bottom: 10px; }
+  .top-actions #soundButton { display: none; }.top-actions { gap: 4px; }.chrome-button { padding-inline: 6px; }.fighter-grid { grid-template-columns: 1fr 1fr 1fr; }.fighter b { font-size: .72rem; }.start-card h1 { font-size: 1.45rem; }.intro { font-size: .78rem; margin-bottom: 10px; }
   .status-panel { top: 7px; left: 7px; width: 64%; }.match-panel { top: 72px; }.kill-feed { display: none; }.joystick { left: 13px; bottom: 18px; }.mobile-actions { right: 10px; }
+}
+
+@media (orientation: portrait) and (max-width: 760px) {
+  body.forced-landscape { width: 100vw; height: 100vh; overflow: hidden; }
+  body.forced-landscape .game-shell {
+    position: fixed; inset: 0 auto auto 0; width: 100vh; height: 100vw; min-height: 0;
+    transform: rotate(90deg) translateY(-100%); transform-origin: left top;
+  }
+  body.forced-landscape .arena-frame { height: calc(100vw - 50px); }
 }

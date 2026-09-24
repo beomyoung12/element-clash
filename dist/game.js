@@ -14,13 +14,14 @@ const ui = Object.fromEntries(
     "meleeCd", "rangeCd", "magicCd", "guardState", "dashState", "resultEyebrow", "resultTitle", "scoreGoal",
     "resultBlue", "resultRed", "resultStats", "mobileControls", "joystick", "opponentPicker",
     "matchmakingPanel", "matchStatus", "inviteControls", "inviteCode", "joinInviteButton", "cancelMatchButton",
+    "homeButton", "landscapeButton",
   ].map((id) => [id, document.querySelector(`#${id}`)]),
 );
 
 const CLASSES = {
-  blade: { name: "화염 검사", icon: "검", hp: 142, speed: 214, accel: 710, grip: 1.76, bounce: .66, melee: 52, meleeRange: 108, meleeArc: 2.08, ranged: 7, shotSpeed: 325, shotLife: .68, magic: 40, color: "#ff9a42", projectile: "#ffc052", weapon: "홍염검", armor: "수호갑", spell: "유성진" },
-  ranger: { name: "바람 궁수", icon: "궁", hp: 104, speed: 234, accel: 615, grip: 1.18, bounce: .78, melee: 32, meleeRange: 82, meleeArc: 2.22, ranged: 11, shotSpeed: 380, shotLife: .84, magic: 31, color: "#71e587", projectile: "#b6ff88", weapon: "질풍궁", armor: "엽풍의", spell: "폭풍진" },
-  mage: { name: "서리 술사", icon: "술", hp: 100, speed: 220, accel: 565, grip: .96, bounce: .82, melee: 30, meleeRange: 84, meleeArc: 2.38, ranged: 10, shotSpeed: 340, shotLife: .78, magic: 45, color: "#72d9ff", projectile: "#8df5ff", weapon: "빙정봉", armor: "설화포", spell: "빙하진" },
+  blade: { name: "화염 검사", icon: "검", hp: 142, speed: 214, accel: 710, grip: 1.76, bounce: .66, melee: 41, meleeRange: 105, meleeArc: 2.02, ranged: 5, shotSpeed: 325, shotLife: .66, magic: 38, color: "#ff9a42", projectile: "#ffc052", weapon: "홍염검", armor: "수호갑", spell: "유성진" },
+  ranger: { name: "바람 궁수", icon: "궁", hp: 104, speed: 234, accel: 615, grip: 1.18, bounce: .78, melee: 25, meleeRange: 80, meleeArc: 2.18, ranged: 13, shotSpeed: 420, shotLife: .92, magic: 30, color: "#71e587", projectile: "#b6ff88", weapon: "질풍궁", armor: "엽풍의", spell: "폭풍진" },
+  mage: { name: "서리 술사", icon: "술", hp: 100, speed: 220, accel: 565, grip: .96, bounce: .82, melee: 23, meleeRange: 82, meleeArc: 2.32, ranged: 9, shotSpeed: 350, shotLife: .82, magic: 42, color: "#72d9ff", projectile: "#8df5ff", weapon: "빙정봉", armor: "설화포", spell: "추적 빙하진" },
 };
 
 const SPRITES = Object.fromEntries(Object.keys(CLASSES).map((classId) => {
@@ -47,6 +48,7 @@ let game = makeEmptyGame();
 let lastTime = performance.now();
 let audioEnabled = true;
 let audioCtx = null;
+let landscapeActive = false;
 const net = {
   socket: null, connected: false, waiting: false, role: null, roomCode: null,
   remoteInput: { moveX: 0, moveY: 0, guard: false, dash: false },
@@ -178,13 +180,39 @@ function returnToSelection(message) {
   updateModeUi(); setMatchStatus(message, true);
 }
 
+function goHome() {
+  if (net.waiting || net.role) sendNetwork({ type: "cancel" });
+  net.role = null; net.roomCode = null; net.waiting = false; net.remoteInput = { moveX: 0, moveY: 0, guard: false, dash: false };
+  selectedMode = "duel"; game = makeEmptyGame(); game.mode = "select"; input.keys.clear(); input.moveX = 0; input.moveY = 0; input.guardTouch = false;
+  document.querySelectorAll(".mode-option").forEach((item) => {
+    const selected = item.dataset.mode === "duel"; item.classList.toggle("selected", selected); item.setAttribute("aria-checked", String(selected));
+  });
+  ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = true;
+  ui.pauseButton.textContent = "일시정지"; updateModeUi(); tone(390, .06, "triangle", .025);
+}
+
+async function toggleLandscape() {
+  if (landscapeActive) {
+    landscapeActive = false; document.body.classList.remove("forced-landscape");
+    try { screen.orientation?.unlock?.(); } catch { /* optional browser API */ }
+    try { if (document.fullscreenElement) await document.exitFullscreen(); } catch { /* optional browser API */ }
+    ui.landscapeButton.textContent = "↻ 가로화면"; return;
+  }
+  landscapeActive = true;
+  try { if (!document.fullscreenElement && document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen(); } catch { /* continue with CSS fallback */ }
+  let locked = false;
+  try { if (screen.orientation?.lock) { await screen.orientation.lock("landscape"); locked = true; } } catch { /* iOS and some browsers block orientation lock */ }
+  document.body.classList.toggle("forced-landscape", !locked && matchMedia("(orientation: portrait)").matches);
+  ui.landscapeButton.textContent = "↺ 세로화면";
+}
+
 function createActor(team, classId, x, y, isPlayer = false, index = 0) {
   const spec = CLASSES[classId];
   return {
     id: game.nextId++, team, classId, spec, isPlayer, name: isPlayer ? "YOU" : `${team ? "R" : "B"}-${index + 1}`,
     x, y, vx: 0, vy: 0, r: 29, facingX: team ? -1 : 1, facingY: 0,
     hp: spec.hp, maxHp: spec.hp, mp: 100, maxMp: 100, bp: 100, maxBp: 100,
-    alive: true, invulnerable: 1.2, respawn: 0, flash: 0, stun: 0, guard: false, guardBreak: 0, counter: 0,
+    alive: true, invulnerable: 1.2, respawn: 0, flash: 0, stun: 0, chill: 0, guard: false, guardBreak: 0, counter: 0,
     meleeCd: 0, rangedCd: 0, magicCd: 0, attackAnim: 0, moveX: 0, moveY: 0,
     kills: 0, deaths: 0, aiTimer: rand(.05, .22), strafe: Math.random() < .5 ? -1 : 1, aiSkill: 1, damageScale: 1,
     runTime: 0, dustTimer: 0, wallFlash: 0, step: rand(0, TAU), speedCap: spec.speed,
@@ -252,7 +280,7 @@ function nearestEnemy(actor) {
 
 function melee(actor) {
   if (!actor.alive || actor.stun > 0 || actor.meleeCd > 0) return;
-  actor.meleeCd = actor.classId === "blade" ? .46 : actor.classId === "ranger" ? .58 : .62;
+  actor.meleeCd = actor.classId === "blade" ? .43 : actor.classId === "ranger" ? .52 : .55;
   actor.attackAnim = actor.classId === "mage" ? .29 : .23;
   actor.guardBreak = actor.classId === "blade" ? .22 : .28;
   actor.guard = false;
@@ -281,10 +309,10 @@ function melee(actor) {
 }
 
 function ranged(actor) {
-  const mpCost = actor.classId === "ranger" ? 12 : 14;
+  const mpCost = actor.classId === "ranger" ? 13 : 14;
   if (!actor.alive || actor.stun > 0 || actor.rangedCd > 0 || actor.mp < mpCost) return;
   actor.mp -= mpCost;
-  actor.rangedCd = actor.classId === "ranger" ? .88 : 1.08;
+  actor.rangedCd = actor.classId === "ranger" ? .6 : actor.classId === "mage" ? .72 : .82;
   actor.attackAnim = .18;
   actor.guardBreak = .24;
   actor.guard = false;
@@ -297,16 +325,18 @@ function ranged(actor) {
 }
 
 function magic(actor) {
-  if (!actor.alive || actor.stun > 0 || actor.magicCd > 0 || actor.mp < 35) return;
-  actor.mp -= 35;
-  actor.magicCd = actor.classId === "mage" ? 4.1 : 5.2;
+  const mpCost = actor.classId === "mage" ? 32 : 35;
+  if (!actor.alive || actor.stun > 0 || actor.magicCd > 0 || actor.mp < mpCost) return;
+  actor.mp -= mpCost;
+  actor.magicCd = actor.classId === "mage" ? 3.8 : 5;
   actor.attackAnim = .34;
   actor.guardBreak = .4;
   actor.guard = false;
   const reach = actor.classId === "mage" ? 155 : 125;
+  const nearest = actor.classId === "mage" ? nearestEnemy(actor).target : null;
   game.bursts.push({
-    x: clamp(actor.x + actor.facingX * reach, 65, W - 65),
-    y: clamp(actor.y + actor.facingY * reach, 65, H - 65),
+    x: clamp(nearest?.x ?? actor.x + actor.facingX * reach, 65, W - 65),
+    y: clamp(nearest?.y ?? actor.y + actor.facingY * reach, 65, H - 65),
     radius: actor.classId === "mage" ? 94 : 76, delay: .68, life: 1.12, owner: actor,
     damage: actor.spec.magic, team: actor.team, fired: false, classId: actor.classId,
   });
@@ -365,7 +395,7 @@ function updateControlled(actor, control, dt) {
   actor.guard = Boolean(control.guard) && actor.guardBreak <= 0;
   let accel = actor.spec.accel * (actor.guard ? .34 : 1);
   const dashing = moving && Boolean(control.dash) && actor.bp > 1 && !actor.guard;
-  actor.speedCap = actor.spec.speed * (dashing ? 1.42 : actor.guard ? .45 : 1);
+  actor.speedCap = actor.spec.speed * (dashing ? 1.42 : actor.guard ? .45 : 1) * (actor.chill > 0 ? .62 : 1);
   if (dashing) { accel *= 1.32; actor.bp = Math.max(0, actor.bp - 34 * dt); }
   actor.moveX = moving ? move.x : 0; actor.moveY = moving ? move.y : 0;
   if (moving && !actor.guard) { actor.facingX = move.x; actor.facingY = move.y; }
@@ -416,12 +446,12 @@ function updateAi(actor, dt) {
   }
   const move = quantize8(moveX, moveY);
   actor.moveX = moveX ? move.x : 0; actor.moveY = moveY ? move.y : 0;
-  actor.speedCap = actor.spec.speed * (actor.guard ? .45 : 1);
+  actor.speedCap = actor.spec.speed * (actor.guard ? .45 : 1) * (actor.chill > 0 ? .62 : 1);
   if (actor.stun <= 0 && !actor.guard) { const aiDrive=.76+.16*actor.aiSkill; actor.vx += actor.moveX * actor.spec.accel * aiDrive * dt; actor.vy += actor.moveY * actor.spec.accel * aiDrive * dt; }
   if (actor.aiTimer <= 0) {
     actor.aiTimer = rand(.14, .32) / actor.aiSkill;
     if (d < actor.spec.meleeRange + 18) melee(actor);
-    else if (actor.mp >= 35 && actor.magicCd <= 0 && d < 235 && Math.random() < .17 * actor.aiSkill) magic(actor);
+    else if (actor.mp >= (actor.classId === "mage" ? 32 : 35) && actor.magicCd <= 0 && d < 235 && Math.random() < .17 * actor.aiSkill) magic(actor);
     else if (d < 300 && Math.random() < (actor.classId === "ranger" ? .48 : .3) * actor.aiSkill) ranged(actor);
     if (Math.random() < .08) actor.strafe *= -1;
   }
@@ -470,7 +500,7 @@ function spawnDust(actor) {
 }
 
 function respawnActor(actor) {
-  actor.alive = true; actor.hp = actor.maxHp; actor.mp = 75; actor.bp = 100; actor.invulnerable = 1.35;
+  actor.alive = true; actor.hp = actor.maxHp; actor.mp = 75; actor.bp = 100; actor.chill = 0; actor.invulnerable = 1.35;
   actor.x = actor.team ? W - rand(105, 205) : rand(105, 205); actor.y = rand(190, H - 110);
   actor.vx = 0; actor.vy = 0;
 }
@@ -498,7 +528,10 @@ function updateEffects(dt) {
       for (const actor of game.actors) {
         if (!actor.alive || actor.team === burst.team || actor.invulnerable > 0) continue;
         const d = Math.hypot(actor.x - burst.x, actor.y - burst.y);
-        if (d < burst.radius + actor.r) dealDamage(actor, burst.owner, burst.damage * (1 - d / (burst.radius * 2.2)), actor.x - burst.x, actor.y - burst.y, .86);
+        if (d < burst.radius + actor.r) {
+          dealDamage(actor, burst.owner, burst.damage * (1 - d / (burst.radius * 2.2)), actor.x - burst.x, actor.y - burst.y, .86);
+          if (burst.classId === "mage" && actor.alive) actor.chill = Math.max(actor.chill, 1.25);
+        }
       }
       spawnHit(burst.x, burst.y, burst.classId === "mage" ? "#8df5ff" : "#ffba54", 28);
     }
@@ -521,7 +554,7 @@ function update(dt) {
   if (game.remaining <= 0) { endMatch(game.scores[0] >= game.scores[1] ? 0 : 1); return; }
   for (const actor of game.actors) {
     actor.meleeCd = Math.max(0, actor.meleeCd - dt); actor.rangedCd = Math.max(0, actor.rangedCd - dt); actor.magicCd = Math.max(0, actor.magicCd - dt);
-    actor.invulnerable = Math.max(0, actor.invulnerable - dt); actor.flash = Math.max(0, actor.flash - dt); actor.stun = Math.max(0, actor.stun - dt); actor.counter = Math.max(0, actor.counter - dt); actor.attackAnim = Math.max(0, actor.attackAnim - dt); actor.guardBreak = Math.max(0, actor.guardBreak - dt); actor.wallFlash = Math.max(0, actor.wallFlash - dt);
+    actor.invulnerable = Math.max(0, actor.invulnerable - dt); actor.flash = Math.max(0, actor.flash - dt); actor.stun = Math.max(0, actor.stun - dt); actor.chill = Math.max(0, actor.chill - dt); actor.counter = Math.max(0, actor.counter - dt); actor.attackAnim = Math.max(0, actor.attackAnim - dt); actor.guardBreak = Math.max(0, actor.guardBreak - dt); actor.wallFlash = Math.max(0, actor.wallFlash - dt);
     if (!actor.alive) { actor.respawn -= dt; if (actor.respawn <= 0) respawnActor(actor); continue; }
     if (actor.isPlayer) updatePlayer(actor, dt);
     else if (actor.isNetworkRemote) updateControlled(actor, net.remoteInput, dt);
@@ -558,7 +591,10 @@ function updateHud() {
   ui.hpText.textContent = Math.ceil(p.hp); ui.mpText.textContent = Math.ceil(p.mp); ui.bpText.textContent = Math.ceil(p.bp);
   ui.blueScore.textContent = game.scores[0]; ui.redScore.textContent = game.scores[1];
   const seconds = Math.max(0, Math.ceil(game.remaining)); ui.matchTime.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-  ui.meleeCd.style.height = `${clamp(p.meleeCd / .62, 0, 1) * 100}%`; ui.rangeCd.style.height = `${clamp(p.rangedCd / 1.08, 0, 1) * 100}%`; ui.magicCd.style.height = `${clamp(p.magicCd / 5.2, 0, 1) * 100}%`;
+  const meleeMax = p.classId === "blade" ? .43 : p.classId === "ranger" ? .52 : .55;
+  const rangeMax = p.classId === "ranger" ? .6 : p.classId === "mage" ? .72 : .82;
+  const magicMax = p.classId === "mage" ? 3.8 : 5;
+  ui.meleeCd.style.height = `${clamp(p.meleeCd / meleeMax, 0, 1) * 100}%`; ui.rangeCd.style.height = `${clamp(p.rangedCd / rangeMax, 0, 1) * 100}%`; ui.magicCd.style.height = `${clamp(p.magicCd / magicMax, 0, 1) * 100}%`;
   ui.guardState.style.height = p.guard ? "100%" : "0%"; ui.dashState.style.height = (input.keys.has("ShiftLeft") || input.keys.has("ShiftRight")) ? "35%" : "0%";
 }
 
@@ -706,6 +742,10 @@ function drawActorSprite(actor, time) {
   ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.beginPath(); ctx.ellipse(4, 22, 29, 11, 0, 0, TAU); ctx.fill();
   ctx.strokeStyle = actor.team ? "#ff6271" : "#4dc5ff"; ctx.lineWidth = actor.isPlayer ? 5 : 3;
   ctx.beginPath(); ctx.ellipse(0, 14, 31, 16, 0, 0, TAU); ctx.stroke();
+  if (actor.chill > 0) {
+    ctx.strokeStyle = `rgba(148,244,255,${.35 + .25 * Math.sin(time * 12)})`; ctx.lineWidth = 4; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.ellipse(0, 14, 38, 20, 0, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+  }
   if (actor.counter > 0) { ctx.strokeStyle = "#ffe866"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 3, 38 + Math.sin(time * 13) * 2, 0, TAU); ctx.stroke(); }
   if (actor.guard) {
     ctx.fillStyle = "rgba(90,210,255,.2)"; ctx.strokeStyle = "#b8f4ff"; ctx.lineWidth = 4;
@@ -849,6 +889,8 @@ ui.joinInviteButton.addEventListener("click", () => {
 });
 ui.inviteCode.addEventListener("input", () => { ui.inviteCode.value = ui.inviteCode.value.toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6); });
 ui.cancelMatchButton.addEventListener("click", () => sendNetwork({ type: "cancel" }));
+ui.homeButton.addEventListener("click", goHome);
+ui.landscapeButton.addEventListener("click", toggleLandscape);
 ui.helpButton.addEventListener("click", () => ui.helpDialog.showModal());
 ui.pauseButton.addEventListener("click", () => {
   if (game.networkRole) { addFeed("온라인 대전은 일시정지할 수 없습니다.", "#ffe18a"); return; }
