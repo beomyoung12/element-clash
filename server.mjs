@@ -53,10 +53,20 @@ function parseFrames(client, chunk) {
     if (opcode === 0x8) { client.socket.end(); return; }
     if (opcode === 0x9) { client.socket.write(Buffer.from([0x8a, 0x00])); continue; }
     if (opcode !== 0x1) continue;
+    client.lastSeen = Date.now();
     try { handleMessage(client, JSON.parse(payload.toString("utf8"))); } catch { send(client, { type: "error", message: "잘못된 요청입니다." }); }
   }
 }
 function removeFromQueue(client) { const index = randomQueue.indexOf(client); if (index >= 0) randomQueue.splice(index, 1); }
+function sendInviteRoomState(room, promoted = false) {
+  const common = {
+    type: "room_state", roomCode: room.code, kind: "invite",
+    peerConnected: Boolean(room.host && room.guest), hostName: room.host?.nickname ?? "",
+    guestName: room.guest?.nickname ?? "",
+  };
+  if (room.host) send(room.host, { ...common, lobbyRole: "host", promoted });
+  if (room.guest) send(room.guest, { ...common, lobbyRole: "guest", promoted: false });
+}
 function leaveRoom(client, notify = true) {
   removeFromQueue(client);
   if (!client.room) return;
@@ -64,13 +74,16 @@ function leaveRoom(client, notify = true) {
   const room = rooms.get(code);
   client.room = null;
   if (room) {
+    const wasHost = room.host === client;
     const peer = room.host === client ? room.guest : room.host;
     if (room.host === client) room.host = null;
     if (room.guest === client) room.guest = null;
-    // 초대방은 한 명이라도 남아 있으면 같은 코드로 유지한다. 빈 자리는
-    // 방을 만들었던 사람을 포함해 코드를 아는 사용자가 다시 채울 수 있다.
     if (room.kind === "invite" && peer) {
-      if (notify) send(peer, { type: "peer_left", roomCode: code, roomPreserved: true });
+      // 방장이 나가면 남은 참가자를 새 방장으로 승격한다. 초대방은 한 명이라도
+      // 남아 있는 동안 같은 코드로 유지된다.
+      if (wasHost) { room.host = peer; room.guest = null; }
+      room.rematchReady = undefined;
+      if (notify) sendInviteRoomState(room, wasHost);
       return;
     }
     if (notify && peer) { peer.room = null; send(peer, { type: "peer_left", roomCode: code, roomPreserved: false }); }
@@ -103,6 +116,13 @@ function handleMessage(client, message) {
     client.clientId = String(message.clientId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) || `guest-${randomBytes(8).toString("hex")}`;
     send(client, { type: "connected", playersOnline: onlinePlayerCount() }); broadcastPresence(); return;
   }
+  if (message.type === "ping") { send(client, { type: "pong", sentAt: message.sentAt }); return; }
+  if (message.type === "update_profile") {
+    client.classId = validClass(message.classId); client.nickname = validNickname(message.nickname);
+    const room = client.room && rooms.get(client.room);
+    if (room?.kind === "invite") sendInviteRoomState(room);
+    return;
+  }
   if (message.type === "cancel") { leaveRoom(client); send(client, { type: "cancelled" }); return; }
   if (message.type === "queue_random") {
     leaveRoom(client); client.classId = validClass(message.classId); client.nickname = validNickname(message.nickname);
@@ -114,7 +134,7 @@ function handleMessage(client, message) {
   if (message.type === "create_invite") {
     leaveRoom(client); client.classId = validClass(message.classId); client.nickname = validNickname(message.nickname);
     const code = makeRoomCode(); rooms.set(code, { code, kind: "invite", host: client, guest: null }); client.room = code;
-    send(client, { type: "invite_created", roomCode: code }); return;
+    sendInviteRoomState(rooms.get(code)); return;
   }
   if (message.type === "join_invite") {
     const code = String(message.roomCode || "").trim().toUpperCase(); const room = rooms.get(code);
@@ -124,8 +144,14 @@ function handleMessage(client, message) {
     leaveRoom(client); client.classId = validClass(message.classId); client.nickname = validNickname(message.nickname);
     if (!room.host) room.host = client; else room.guest = client;
     client.room = code;
-    if (room.host && room.guest) match(room.host, room.guest, code, "invite");
-    else send(client, { type: "invite_created", roomCode: code, rejoined: true });
+    sendInviteRoomState(room);
+    return;
+  }
+  if (message.type === "start_invite" && client.room) {
+    const room = rooms.get(client.room);
+    if (!room || room.kind !== "invite" || room.host !== client) { send(client, { type: "error", message: "방장만 전투를 시작할 수 있습니다." }); return; }
+    if (!room.guest) { send(client, { type: "error", message: "상대가 들어온 뒤 시작할 수 있습니다." }); return; }
+    match(room.host, room.guest, room.code, "invite");
     return;
   }
   if (message.type === "rematch" && client.room) {
@@ -136,7 +162,7 @@ function handleMessage(client, message) {
     if (room.rematchReady.size === 2) match(room.host, room.guest, room.code, room.kind);
     return;
   }
-  if (["input", "action", "snapshot", "match_end", "rematch"].includes(message.type) && client.room) {
+  if (["input", "action", "snapshot", "match_end"].includes(message.type) && client.room) {
     const room = rooms.get(client.room); const peer = room && (room.host === client ? room.guest : room.host);
     if (peer) send(peer, message);
   }
@@ -164,11 +190,19 @@ server.on("upgrade", (request, socket) => {
   }
   const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-  const client = { socket, buffer: Buffer.alloc(0), room: null, classId: "blade", nickname: "전사", clientId: null };
+  socket.setKeepAlive(true, 30_000);
+  const client = { socket, buffer: Buffer.alloc(0), room: null, classId: "blade", nickname: "전사", clientId: null, lastSeen: Date.now(), closed: false };
   clients.add(client);
   socket.on("data", (chunk) => parseFrames(client, chunk));
-  const disconnect = () => { leaveRoom(client); clients.delete(client); broadcastPresence(); };
+  const disconnect = () => {
+    if (client.closed) return;
+    client.closed = true; leaveRoom(client); clients.delete(client); broadcastPresence();
+  };
   socket.on("close", disconnect);
   socket.on("error", disconnect);
 });
+setInterval(() => {
+  const staleBefore = Date.now() - 180_000;
+  for (const client of clients) if (client.lastSeen < staleBefore) client.socket.destroy();
+}, 30_000).unref();
 server.listen(port, host, () => console.log(`Element Clash: http://127.0.0.1:${port} · 온라인 매칭 서버 준비`));

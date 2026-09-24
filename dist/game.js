@@ -56,8 +56,9 @@ let playerNickname = (localStorage.getItem("elementClashNickname") || "나의 �
 const browserPlayerId = localStorage.getItem("elementClashPlayerId") || (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 localStorage.setItem("elementClashPlayerId", browserPlayerId);
 const net = {
-  socket: null, connected: false, waiting: false, role: null, roomCode: null, matchKind: null,
+  socket: null, connected: false, waiting: false, role: null, lobbyRole: null, peerConnected: false, roomCode: null, matchKind: null,
   lastInviteCode: localStorage.getItem("elementClashInviteCode") || "", playersOnline: 0,
+  lastPong: Date.now(), reconnectCode: null,
   remoteInput: { moveX: 0, moveY: 0, guard: false, dash: false },
   lastInputSent: 0, lastSnapshotSent: 0, localTeam: 0,
 };
@@ -137,8 +138,9 @@ function connectNetwork() {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(`${protocol}//${location.host}/ws`);
   net.socket = socket;
-  socket.addEventListener("open", () => { net.connected = true; sendNetwork({ type: "hello", clientId: browserPlayerId }); setMatchStatus("온라인 대전 서버 연결됨"); });
+  socket.addEventListener("open", () => { net.connected = true; net.lastPong = Date.now(); sendNetwork({ type: "hello", clientId: browserPlayerId }); setMatchStatus("온라인 대전 서버 연결됨"); });
   socket.addEventListener("close", () => {
+    if (net.matchKind === "invite" && net.roomCode) net.reconnectCode = net.roomCode;
     net.connected = false; net.waiting = false;
     updatePresence(net.playersOnline, false); updateRoomDisplay("서버 연결 끊김", net.roomCode, Boolean(net.roomCode));
     setMatchStatus("온라인 서버 연결이 끊겼습니다. 잠시 후 다시 시도하세요.", true);
@@ -147,13 +149,23 @@ function connectNetwork() {
   });
   socket.addEventListener("error", () => setMatchStatus("온라인 서버에 연결할 수 없습니다.", true));
   socket.addEventListener("message", (event) => {
+    net.lastPong = Date.now();
     try { handleNetworkMessage(JSON.parse(event.data)); } catch { setMatchStatus("온라인 데이터를 읽지 못했습니다.", true); }
   });
 }
 
 function handleNetworkMessage(message) {
-  if (message.type === "connected") { net.connected = true; updatePresence(message.playersOnline); setMatchStatus(`온라인 서버 연결됨 · 접속 ${message.playersOnline}명`); return; }
+  if (message.type === "connected") {
+    net.connected = true; updatePresence(message.playersOnline); setMatchStatus(`온라인 서버 연결됨 · 접속 ${message.playersOnline}명`);
+    if (net.reconnectCode) {
+      const code = net.reconnectCode; net.reconnectCode = null; selectInviteMode();
+      sendNetwork({ type: "join_invite", roomCode: code, classId: selectedClass, nickname: currentNickname() });
+      setMatchStatus(`${code} 방에 다시 연결하는 중…`);
+    }
+    return;
+  }
   if (message.type === "presence") { updatePresence(message.playersOnline); return; }
+  if (message.type === "pong") { net.lastPong = Date.now(); return; }
   if (message.type === "waiting") {
     net.waiting = true; ui.cancelMatchButton.hidden = false;
     setMatchStatus("상대를 찾는 중… 다른 접속자가 오면 바로 시작합니다."); return;
@@ -163,15 +175,22 @@ function handleNetworkMessage(message) {
     updateRoomDisplay(message.rejoined ? "방 재입장 완료 · 상대 대기" : "상대 접속 대기", message.roomCode, true);
     setMatchStatus(`초대 코드 ${message.roomCode} · 상대에게 이 코드를 보내세요.`); return;
   }
+  if (message.type === "room_state") { enterInviteLobby(message); return; }
   if (message.type === "matched") { startNetworkMatch(message); return; }
   if (message.type === "rematch_waiting") { ui.restartButton.disabled = true; ui.restartButton.textContent = "상대의 다시 싸우기 선택 대기…"; return; }
-  if (message.type === "cancelled") { net.waiting = false; net.role = null; net.roomCode = null; net.matchKind = null; ui.cancelMatchButton.hidden = true; updateRoomDisplay("", null, false); updateModeUi(); return; }
+  if (message.type === "cancelled") { net.waiting = false; net.role = null; net.lobbyRole = null; net.peerConnected = false; net.roomCode = null; net.matchKind = null; ui.cancelMatchButton.hidden = true; updateRoomDisplay("", null, false); updateModeUi(); return; }
   if (message.type === "peer_left") {
     if (message.roomPreserved && message.roomCode) waitInPreservedInviteRoom(message.roomCode);
     else returnToSelection("상대가 대전에서 나갔습니다.");
     return;
   }
-  if (message.type === "error") { net.waiting = false; ui.cancelMatchButton.hidden = true; setMatchStatus(message.message, true); return; }
+  if (message.type === "error") {
+    if (String(message.message).includes("초대 코드")) {
+      net.waiting = false; net.lobbyRole = null; net.peerConnected = false; net.roomCode = null; net.matchKind = null;
+      ui.cancelMatchButton.hidden = true; updateRoomDisplay("", null, false); updateModeUi();
+    }
+    setMatchStatus(message.message, true); return;
+  }
   if (message.type === "input" && net.role === "host") { net.remoteInput = message.input; return; }
   if (message.type === "action" && net.role === "host") {
     const remote = game.actors.find((actor) => actor.isNetworkRemote);
@@ -181,9 +200,30 @@ function handleNetworkMessage(message) {
   if (message.type === "match_end" && net.role === "guest") endMatch(message.winnerTeam, false);
 }
 
+function selectInviteMode() {
+  selectedMode = "invite";
+  document.querySelectorAll(".mode-option").forEach((item) => {
+    const selected = item.dataset.mode === "invite"; item.classList.toggle("selected", selected); item.setAttribute("aria-checked", String(selected));
+  });
+}
+
+function enterInviteLobby(message) {
+  selectInviteMode(); game = makeEmptyGame(); game.mode = "select";
+  net.role = null; net.waiting = true; net.roomCode = message.roomCode; net.matchKind = "invite";
+  net.lobbyRole = message.lobbyRole; net.peerConnected = Boolean(message.peerConnected); rememberInviteCode(message.roomCode);
+  ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.pauseScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = false;
+  updateModeUi();
+  const isHost = net.lobbyRole === "host";
+  const state = net.peerConnected ? (isHost ? "상대 접속 완료 · 시작 가능" : "방장 시작 대기") : "상대 접속 대기";
+  updateRoomDisplay(state, message.roomCode, true);
+  if (message.promoted) setMatchStatus(`기존 방장이 나가서 내가 새 방장이 되었습니다. ${message.roomCode} 방은 유지됩니다.`);
+  else if (net.peerConnected) setMatchStatus(isHost ? "상대가 들어왔습니다. 전투 시작 버튼을 누르세요." : "방에 들어왔습니다. 방장이 시작하기를 기다립니다.");
+  else setMatchStatus(`초대 코드 ${message.roomCode} · 상대에게 이 코드를 보내세요.`);
+}
+
 function startNetworkMatch(message) {
   game = makeEmptyGame(); game.mode = "playing"; game.matchType = message.kind; game.networkRole = message.role; game.remaining = 120; game.scoreLimit = 5;
-  net.role = message.role; net.roomCode = message.roomCode; net.matchKind = message.kind; net.localTeam = message.role === "host" ? 0 : 1; net.waiting = false;
+  net.role = message.role; net.lobbyRole = message.role; net.peerConnected = true; net.roomCode = message.roomCode; net.matchKind = message.kind; net.localTeam = message.role === "host" ? 0 : 1; net.waiting = false;
   if (message.kind === "invite") rememberInviteCode(message.roomCode);
   const hostActor = createActor(0, message.hostClass, 390, 300, message.role === "host", 0);
   const guestActor = createActor(1, message.guestClass, W - 390, 300, message.role === "guest", 0);
@@ -220,18 +260,15 @@ function applySnapshot(state) {
 }
 
 function returnToSelection(message) {
-  net.role = null; net.roomCode = null; net.matchKind = null; net.waiting = false; game = makeEmptyGame(); game.mode = "select";
+  net.role = null; net.lobbyRole = null; net.peerConnected = false; net.roomCode = null; net.matchKind = null; net.waiting = false; game = makeEmptyGame(); game.mode = "select";
   ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.pauseScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = true;
   updateRoomDisplay("", null, false);
   updateModeUi(); setMatchStatus(message, true);
 }
 
 function waitInPreservedInviteRoom(roomCode) {
-  net.role = null; net.roomCode = roomCode; net.matchKind = "invite"; net.waiting = true; rememberInviteCode(roomCode);
-  selectedMode = "invite"; game = makeEmptyGame(); game.mode = "select";
-  document.querySelectorAll(".mode-option").forEach((item) => {
-    const selected = item.dataset.mode === "invite"; item.classList.toggle("selected", selected); item.setAttribute("aria-checked", String(selected));
-  });
+  net.role = null; net.lobbyRole = "host"; net.peerConnected = false; net.roomCode = roomCode; net.matchKind = "invite"; net.waiting = true; rememberInviteCode(roomCode);
+  selectInviteMode(); game = makeEmptyGame(); game.mode = "select";
   ui.startScreen.hidden = false; ui.resultScreen.hidden = true; ui.pauseScreen.hidden = true; ui.hud.hidden = true; ui.mobileControls.hidden = true; ui.cancelMatchButton.hidden = false;
   updateModeUi(); updateRoomDisplay("상대 재접속 대기", roomCode, true);
   setMatchStatus(`상대가 나갔지만 ${roomCode} 방은 유지됩니다. 같은 코드로 다시 들어올 수 있습니다.`);
@@ -239,7 +276,7 @@ function waitInPreservedInviteRoom(roomCode) {
 
 function goHome() {
   if (net.waiting || net.role) sendNetwork({ type: "cancel" });
-  net.role = null; net.roomCode = null; net.matchKind = null; net.waiting = false; net.remoteInput = { moveX: 0, moveY: 0, guard: false, dash: false };
+  net.role = null; net.lobbyRole = null; net.peerConnected = false; net.roomCode = null; net.matchKind = null; net.waiting = false; net.remoteInput = { moveX: 0, moveY: 0, guard: false, dash: false };
   selectedMode = "duel"; game = makeEmptyGame(); game.mode = "select"; input.keys.clear(); input.moveX = 0; input.moveY = 0; input.guardTouch = false;
   document.querySelectorAll(".mode-option").forEach((item) => {
     const selected = item.dataset.mode === "duel"; item.classList.toggle("selected", selected); item.setAttribute("aria-checked", String(selected));
@@ -899,6 +936,7 @@ function loop(now) {
 }
 
 document.querySelectorAll(".mode-option").forEach((button) => button.addEventListener("click", () => {
+  if (button.dataset.mode === selectedMode) return;
   if (net.waiting) sendNetwork({ type: "cancel" });
   selectedMode = button.dataset.mode;
   document.querySelectorAll(".mode-option").forEach((item) => { item.classList.toggle("selected", item === button); item.setAttribute("aria-checked", String(item === button)); });
@@ -916,8 +954,14 @@ function updateModeUi() {
   ui.cancelMatchButton.hidden = !net.waiting;
   const main = ui.startButton.querySelector("span"); const sub = ui.startButton.querySelector("small");
   if (selectedMode === "random") { main.textContent = "랜덤 매칭 시작"; sub.textContent = "상대가 접속하면 자동 시작"; }
-  else if (selectedMode === "invite") { main.textContent = "초대방 만들기"; sub.textContent = "코드를 친구에게 전달"; }
+  else if (selectedMode === "invite" && net.waiting) {
+    if (net.lobbyRole === "host" && net.peerConnected) { main.textContent = "전투 시작"; sub.textContent = "방장 권한으로 시작"; ui.startButton.disabled = false; }
+    else if (net.lobbyRole === "host") { main.textContent = "상대 기다리는 중"; sub.textContent = "입장하면 시작할 수 있습니다"; ui.startButton.disabled = true; }
+    else { main.textContent = "방장 시작 대기"; sub.textContent = "방장이 시작하면 자동 입장"; ui.startButton.disabled = true; }
+  }
+  else if (selectedMode === "invite") { main.textContent = "초대방 만들기"; sub.textContent = "코드를 친구에게 전달"; ui.startButton.disabled = false; }
   else { main.textContent = "전투 시작"; sub.textContent = "클릭 또는 ENTER"; }
+  if (selectedMode !== "invite") ui.startButton.disabled = false;
   if (["random", "invite"].includes(selectedMode) && !net.waiting) setMatchStatus(net.connected ? "온라인 서버 연결됨" : "온라인 서버에 연결 중입니다…");
   updateRoomDisplay(net.waiting ? "상대 접속 대기" : "", net.roomCode, selectedMode === "invite" && Boolean(net.roomCode));
 }
@@ -926,6 +970,7 @@ document.querySelectorAll(".fighter").forEach((button) => button.addEventListene
   selectedClass = button.dataset.class;
   document.querySelectorAll(".fighter").forEach((item) => { item.classList.toggle("selected", item === button); item.setAttribute("aria-checked", String(item === button)); });
   tone(390, .05, "triangle", .025);
+  if (net.roomCode) sendNetwork({ type: "update_profile", classId: selectedClass, nickname: currentNickname() });
 }));
 document.querySelectorAll(".opponent-option").forEach((button) => button.addEventListener("click", () => {
   selectedOpponentClass = button.dataset.opponentClass;
@@ -937,6 +982,10 @@ function startSelectedMode() {
   const nickname = currentNickname();
   if (selectedMode === "duel" || selectedMode === "team") { startMatch(); return; }
   if (!net.connected) { connectNetwork(); setMatchStatus("온라인 서버에 다시 연결 중입니다…", true); return; }
+  if (selectedMode === "invite" && net.waiting) {
+    if (net.lobbyRole === "host" && net.peerConnected) { sendNetwork({ type: "start_invite" }); setMatchStatus("전투를 시작하는 중…"); }
+    return;
+  }
   if (net.waiting) return;
   if (selectedMode === "random") sendNetwork({ type: "queue_random", classId: selectedClass, nickname });
   else sendNetwork({ type: "create_invite", classId: selectedClass, nickname });
@@ -955,7 +1004,10 @@ ui.joinInviteButton.addEventListener("click", () => {
   sendNetwork({ type: "join_invite", roomCode, classId: selectedClass, nickname: currentNickname() }); net.waiting = true; ui.cancelMatchButton.hidden = false; rememberInviteCode(roomCode); updateRoomDisplay("방 연결 중", roomCode, true); setMatchStatus(`${roomCode} 방에 참가하는 중…`);
 });
 ui.inviteCode.addEventListener("input", () => { ui.inviteCode.value = ui.inviteCode.value.toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6); });
-ui.nicknameInput.addEventListener("change", currentNickname);
+ui.nicknameInput.addEventListener("change", () => {
+  const nickname = currentNickname();
+  if (net.roomCode) sendNetwork({ type: "update_profile", classId: selectedClass, nickname });
+});
 ui.cancelMatchButton.addEventListener("click", () => sendNetwork({ type: "cancel" }));
 ui.homeButton.addEventListener("click", goHome);
 ui.resultHomeButton.addEventListener("click", goHome);
@@ -1014,6 +1066,12 @@ document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("pointerdown", press);
   if (action === "guard") { button.addEventListener("pointerup", () => input.guardTouch = false); button.addEventListener("pointercancel", () => input.guardTouch = false); button.addEventListener("pointerleave", () => input.guardTouch = false); }
 });
+
+setInterval(() => {
+  if (net.socket?.readyState !== WebSocket.OPEN) return;
+  if (Date.now() - net.lastPong > 120_000) { net.socket.close(); return; }
+  sendNetwork({ type: "ping", sentAt: Date.now() });
+}, 15_000);
 
 connectNetwork();
 updateModeUi();

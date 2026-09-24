@@ -32,7 +32,7 @@ node server.mjs
 - **1대1 연습전**: 내 직업과 컴퓨터 직업을 각각 선택하는 완화된 AI 5 K.O. 선취전입니다.
 - **4대4 팀전**: 아군 AI 3명과 함께 싸우는 12 K.O. 선취전입니다.
 - **랜덤 대전**: 같은 서버에서 기다리는 다른 접속자와 자동으로 연결되는 1대1입니다.
-- **초대 대전**: 방을 만든 사람에게 표시된 6자리 코드를 상대가 입력하는 1대1입니다.
+- **초대 대전**: 방을 만든 사람에게 표시된 6자리 코드를 상대가 입력한 뒤, 방장이 `전투 시작`을 누르는 1대1입니다. 방장이 나가고 상대가 남아 있으면 남은 사람이 새 방장이 되며 같은 코드가 유지됩니다.
 
 온라인 대전은 방을 먼저 만든 쪽의 전투 판정을 기준으로 두 화면을 실시간 동기화합니다.
 
@@ -64,7 +64,7 @@ node server.mjs
 
 1. GitHub에서 `New repository`를 누르고 `element-clash`라는 공개 저장소를 **빈 상태**로 만듭니다.
 2. 생성 직후 안내 화면의 `uploading an existing file`을 누릅니다.
-3. 탐색기에서 `survival-arena` 폴더 자체가 아니라 그 **안의 내용 전체**(`dist`, `server.mjs`, `package.json`, `render.yaml`, `README.md`)를 선택해 끌어다 놓습니다.
+3. 탐색기에서 `survival-arena` 폴더 자체가 아니라 그 **안의 내용 전체**를 선택해 끌어다 놓습니다. 필수 항목은 `dist` 폴더 전체(내부 `assets` 포함), `server.mjs`, `package.json`, `render.yaml`, `README.md`입니다. `node_modules` 폴더가 생겨도 그것은 올리지 않습니다.
 4. 아래 `Commit changes`를 누릅니다.
 
 GitHub Pages는 정적 파일만 제공하므로 랜덤·초대 매칭 서버를 실행할 수 없습니다. 온라인 대전까지 공개하려면 Render에서 `New +` → `Blueprint` → 이 GitHub 저장소 선택 → `Apply`를 누릅니다. 포함된 `render.yaml`이 실행 방법을 자동 설정합니다. 배포가 끝나면 Render가 제공한 `https://...onrender.com` 주소 하나를 두 사람이 같이 사용합니다.
