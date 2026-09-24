@@ -25,10 +25,11 @@ const CLASSES = {
 };
 
 const SPRITES = Object.fromEntries(Object.keys(CLASSES).map((classId) => {
-  const image = new Image();
-  image.decoding = "async";
-  image.src = `./assets/${classId}-atlas-v1.png`;
-  return [classId, image];
+  const set = {};
+  for (const [state, file] of Object.entries({ idle: `${classId}-atlas-v1.png`, run: `${classId}-run-atlas-v2.png`, attack: `${classId}-attack-atlas-v2.png` })) {
+    const image = new Image(); image.decoding = "async"; image.src = `./assets/${file}`; set[state] = image;
+  }
+  return [classId, set];
 }));
 const DIRECTION_TO_FRAME = [2, 1, 0, 7, 6, 5, 4, 3];
 
@@ -281,7 +282,7 @@ function nearestEnemy(actor) {
 function melee(actor) {
   if (!actor.alive || actor.stun > 0 || actor.meleeCd > 0) return;
   actor.meleeCd = actor.classId === "blade" ? .43 : actor.classId === "ranger" ? .52 : .55;
-  actor.attackAnim = actor.classId === "mage" ? .29 : .23;
+  actor.attackAnim = actor.classId === "mage" ? .3 : actor.classId === "blade" ? .28 : .25;
   actor.guardBreak = actor.classId === "blade" ? .22 : .28;
   actor.guard = false;
   const baseAngle = Math.atan2(actor.facingY, actor.facingX);
@@ -313,7 +314,7 @@ function ranged(actor) {
   if (!actor.alive || actor.stun > 0 || actor.rangedCd > 0 || actor.mp < mpCost) return;
   actor.mp -= mpCost;
   actor.rangedCd = actor.classId === "ranger" ? .6 : actor.classId === "mage" ? .72 : .82;
-  actor.attackAnim = .18;
+  actor.attackAnim = .26;
   actor.guardBreak = .24;
   actor.guard = false;
   game.projectiles.push({
@@ -329,7 +330,7 @@ function magic(actor) {
   if (!actor.alive || actor.stun > 0 || actor.magicCd > 0 || actor.mp < mpCost) return;
   actor.mp -= mpCost;
   actor.magicCd = actor.classId === "mage" ? 3.8 : 5;
-  actor.attackAnim = .34;
+  actor.attackAnim = .38;
   actor.guardBreak = .4;
   actor.guard = false;
   const reach = actor.classId === "mage" ? 155 : 125;
@@ -728,13 +729,16 @@ function drawActorSprite(actor, time) {
     ctx.beginPath(); ctx.arc(actor.x, actor.y - 5, 16 + Math.sin(time * 5) * 3, 0, TAU); ctx.stroke();
     ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.font = "800 12px sans-serif"; ctx.textAlign = "center"; ctx.fillText(actor.respawn.toFixed(1), actor.x, actor.y); ctx.restore(); return;
   }
-  const image = SPRITES[actor.classId];
   const speed = Math.hypot(actor.vx, actor.vy);
-  const bob = speed > 30 ? Math.sin(actor.step) * 2.4 : Math.sin(time * 3 + actor.id) * .65;
+  const moving = speed > 34;
+  const spriteSet = SPRITES[actor.classId];
+  const pose = actor.attackAnim > 0 ? "attack" : moving && Math.sin(actor.step) > -.12 ? "run" : "idle";
+  const image = spriteSet[pose].complete && spriteSet[pose].naturalWidth ? spriteSet[pose] : spriteSet.idle;
+  const bob = moving ? Math.sin(actor.step * 2) * 1.35 : Math.sin(time * 3 + actor.id) * .65;
   const octant = (Math.round(Math.atan2(actor.facingY, actor.facingX) / (Math.PI / 4)) + 8) % 8;
   const frame = DIRECTION_TO_FRAME[octant];
   const col = frame % 4; const row = Math.floor(frame / 4);
-  const attackMax = actor.classId === "mage" ? .34 : .23;
+  const attackMax = actor.classId === "mage" ? .38 : .28;
   const attackPhase = actor.attackAnim > 0 ? Math.sin((1 - actor.attackAnim / attackMax) * Math.PI) : 0;
   const faceAngle = Math.atan2(actor.facingY, actor.facingX);
 
@@ -751,8 +755,7 @@ function drawActorSprite(actor, time) {
     ctx.fillStyle = "rgba(90,210,255,.2)"; ctx.strokeStyle = "#b8f4ff"; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.moveTo(actor.facingX * 10, actor.facingY * 10); ctx.arc(0, 0, 44, faceAngle - 1.22, faceAngle + 1.22); ctx.closePath(); ctx.fill(); ctx.stroke();
   }
-  ctx.translate(actor.facingX * attackPhase * 9, actor.facingY * attackPhase * 9 + bob);
-  ctx.rotate((actor.classId === "blade" ? -.075 : .045) * attackPhase * (actor.facingX >= 0 ? 1 : -1));
+  ctx.translate(actor.facingX * attackPhase * 6, actor.facingY * attackPhase * 6 + bob);
   if (actor.invulnerable > 0) ctx.globalAlpha = .55 + Math.sin(time * 20) * .25;
   if (actor.flash > 0) { ctx.shadowBlur = 18; ctx.shadowColor = "#fff"; }
   if (image.complete && image.naturalWidth) {
@@ -803,7 +806,9 @@ function drawEffects() {
 }
 
 function drawMinimap() {
-  const x = W - 170; const y = 18; const w = 145; const h = 92;
+  const compactLandscape = canvas.clientHeight <= 520 && canvas.clientWidth > canvas.clientHeight;
+  const w = compactLandscape ? 122 : 145; const h = compactLandscape ? 76 : 92;
+  const x = W - w - 25; const y = compactLandscape ? 72 : 18;
   ctx.fillStyle = "rgba(2,13,7,.68)"; ctx.fillRect(x,y,w,h); ctx.strokeStyle = "rgba(215,255,205,.55)"; ctx.lineWidth = 2; ctx.strokeRect(x,y,w,h);
   for (const ob of obstacles) { ctx.fillStyle = "rgba(173,205,153,.35)"; ctx.fillRect(x + ob.x / W * w - 2, y + ob.y / H * h - 2, 4, 4); }
   for (const a of game.actors) { if (!a.alive) continue; ctx.fillStyle = a.team ? "#ff5e70" : "#50c8ff"; ctx.beginPath(); ctx.arc(x+a.x/W*w,y+a.y/H*h,a.isPlayer?4:2.5,0,TAU); ctx.fill(); }
